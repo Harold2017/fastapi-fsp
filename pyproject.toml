@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastapi-fsp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Filter, Sort, and Paginate (FSP) utilities for FastAPI + SQLModel"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -30,9 +30,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/fastapi-fsp"
-Repository = "https://github.com/your-org/fastapi-fsp"
-Issues = "https://github.com/your-org/fastapi-fsp/issues"
+Homepage = "https://github.com/fromej-dev/fastapi-fsp"
+Repository = "https://github.com/fromej-dev/fastapi-fsp"
+Issues = "https://github.com/fromej-dev/fastapi-fsp/issues"
 
 [dependency-groups]
 dev = [

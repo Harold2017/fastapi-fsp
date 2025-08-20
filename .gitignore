@@ -34,6 +34,8 @@ coverage.xml
 # IDEs and editors
 .vscode/
 .idea/
+.idea/*
+.idea/workspace.xml
 *.iml
 
 # OS-specific
