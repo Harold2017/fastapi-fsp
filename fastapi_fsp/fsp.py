@@ -2,6 +2,7 @@ import math
 from typing import Annotated, Any, List, Optional
 
 from fastapi import Depends, HTTPException, Query, Request, status
+from pydantic import ValidationError
 from sqlalchemy import Select, func
 from sqlmodel import Session, not_, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -19,22 +20,90 @@ from fastapi_fsp.models import (
 )
 
 
-def _parse_filters(
-    fields: Optional[List[str]] = Query(None, alias="field"),
-    operators: Optional[List[FilterOperator]] = Query(None, alias="operator"),
-    values: Optional[List[str]] = Query(None, alias="value"),
-) -> List[Filter] | None:
-    if not fields:
-        return None
-    filters: List[Filter] = []
-    if operators is None or values is None or not (len(fields) == len(operators) == len(values)):
+def _parse_one_filter_at(i: int, field: str, operator: str, value: str) -> Filter:
+    try:
+        filter_ = Filter(field=field, operator=FilterOperator(operator), value=value)
+    except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Mismatched filter parameters.",
+            detail=f"Invalid filter at index {i}: {str(e)}",
+        ) from e
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid operator '{operator}' at index {i}.",
+        ) from e
+    return filter_
+
+
+def _parse_array_of_filters(
+    fields: List[str], operators: List[str], values: List[str]
+) -> List[Filter]:
+    # Validate that we have matching lengths
+    if not (len(fields) == len(operators) == len(values)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mismatched filter parameters in array format.",
         )
-    for field, operator, value in zip(fields, operators, values):
-        filters.append(Filter(field=field, operator=operator, value=value))
-    return filters
+    return [
+        _parse_one_filter_at(i, field, operator, value)
+        for i, (field, operator, value) in enumerate(zip(fields, operators, values))
+    ]
+
+
+def _parse_filters(
+    request: Request,
+) -> Optional[List[Filter]]:
+    """
+    Parse filters from query parameters supporting two formats:
+    1. Indexed format:
+       ?filters[0][field]=age&filters[0][operator]=gte&filters[0][value]=18&filters[1][field]=name&filters[1][operator]=ilike&filters[1][value]=joy
+    2. Simple format:
+       ?field=age&operator=gte&value=18&field=name&operator=ilike&value=joy
+    """
+    query_params = request.query_params
+    filters = []
+
+    # Try indexed format first: filters[0][field], filters[0][operator], etc.
+    i = 0
+    while True:
+        field_key = f"filters[{i}][field]"
+        operator_key = f"filters[{i}][operator]"
+        value_key = f"filters[{i}][value]"
+
+        field = query_params.get(field_key)
+        operator = query_params.get(operator_key)
+        value = query_params.get(value_key)
+
+        # If we don't have a field at this index, break the loop
+        if field is None:
+            break
+
+        # Validate that we have all required parts
+        if operator is None or value is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Incomplete filter at index {i}. Missing operator or value.",
+            )
+
+        filters.append(_parse_one_filter_at(i, field, operator, value))
+        i += 1
+
+    # If we found indexed filters, return them
+    if filters:
+        return filters
+
+    # Fall back to simple format: field, operator, value
+    filters = _parse_array_of_filters(
+        query_params.getlist("field"),
+        query_params.getlist("operator"),
+        query_params.getlist("value"),
+    )
+    if filters:
+        return filters
+
+    # No filters found
+    return None
 
 
 def _parse_sort(

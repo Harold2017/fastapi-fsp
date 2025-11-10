@@ -84,7 +84,9 @@ Sorting:
 - sort_by: the field name, e.g., `name`
 - order: `asc` or `desc`
 
-Filtering (repeatable sets; arrays are supported by sending multiple parameters):
+Filtering (two supported formats):
+
+1) Simple (triplets repeated in the query string):
 - field: the field/column name, e.g., `name`
 - operator: one of
   - eq, ne
@@ -97,16 +99,24 @@ Filtering (repeatable sets; arrays are supported by sending multiple parameters)
   - contains, starts_with, ends_with (translated to LIKE patterns)
 - value: raw string value (or list-like comma-separated depending on operator)
 
-Examples:
+Examples (simple format):
 - `?field=name&operator=eq&value=Deadpond`
 - `?field=age&operator=between&value=18,30`
 - `?field=name&operator=in&value=Deadpond,Rusty-Man`
 - `?field=name&operator=contains&value=man`
+- Chain multiple filters by repeating the triplet: `?field=age&operator=gte&value=18&field=name&operator=ilike&value=rust`
 
-You can chain multiple filters by repeating the triplet:
+2) Indexed format (useful for clients that handle arrays of objects):
+- Use keys like `filters[0][field]`, `filters[0][operator]`, `filters[0][value]`, then increment the index for additional filters (`filters[1][...]`, etc.).
+
+Example (indexed format):
 ```
-?field=age&operator=gte&value=18&field=name&operator=ilike&value=rust
+?filters[0][field]=age&filters[0][operator]=gte&filters[0][value]=18&filters[1][field]=name&filters[1][operator]=ilike&filters[1][value]=joy
 ```
+
+Notes:
+- Both formats are equivalent; the indexed format takes precedence if present.
+- If any filter is incomplete (missing operator or value in the indexed form, or mismatched counts of simple triplets), the API responds with HTTP 400.
 
 ## Response model
 
