@@ -20,22 +20,18 @@ from fastapi_fsp.models import (
 )
 
 
-def _parse_one_filter_at(
-    i: int, field: str, operator: str, value: str
-) -> Filter:
+def _parse_one_filter_at(i: int, field: str, operator: str, value: str) -> Filter:
     try:
-        filter_ = Filter(
-            field=field, operator=FilterOperator(operator), value=value
-        )
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid operator '{operator}' at index {i}.",
-        ) from e
+        filter_ = Filter(field=field, operator=FilterOperator(operator), value=value)
     except ValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid filter at index {i}: {str(e)}",
+        ) from e
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid operator '{operator}' at index {i}.",
         ) from e
     return filter_
 
@@ -51,9 +47,7 @@ def _parse_array_of_filters(
         )
     return [
         _parse_one_filter_at(i, field, operator, value)
-        for i, (field, operator, value) in enumerate(
-            zip(fields, operators, values)
-        )
+        for i, (field, operator, value) in enumerate(zip(fields, operators, values))
     ]
 
 
