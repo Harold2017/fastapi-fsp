@@ -1,6 +1,8 @@
 import math
+from datetime import datetime
 from typing import Annotated, Any, List, Optional
 
+from dateutil.parser import parse
 from fastapi import Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from sqlalchemy import ColumnCollection, ColumnElement, Select, func
@@ -292,23 +294,37 @@ class FSPManager:
         )
 
     @staticmethod
-    def coerce_value(column, raw):
-        # Try to coerce raw (str or other) to the column's python type for proper comparisons
+    def _coerce_value(column: ColumnElement[Any], raw: str):
+        # Try to coerce raw (str) to the column's python type for proper comparisons
         try:
             pytype = getattr(column.type, "python_type", None)
         except Exception:
             pytype = None
-        if pytype is None or raw is None:
-            return raw
-        if isinstance(raw, pytype):
+        if pytype is None or isinstance(raw, pytype):
             return raw
         # Handle booleans represented as strings
-        if pytype is bool and isinstance(raw, str):
+        if pytype is bool:
             val = raw.strip().lower()
             if val in {"true", "1", "t", "yes", "y"}:
                 return True
             if val in {"false", "0", "f", "no", "n"}:
                 return False
+        # Handle integers represented as strings
+        if pytype is int:
+            try:
+                return int(raw)
+            except ValueError:
+                # Handle common cases like "1.0"
+                try:
+                    return int(float(raw))
+                except ValueError:
+                    return raw
+        # Handle dates represented as strings
+        if pytype is datetime:
+            try:
+                return parse(raw)
+            except ValueError:
+                return raw
         # Generic cast with fallback
         try:
             return pytype(raw)
@@ -316,89 +332,85 @@ class FSPManager:
             return raw
 
     @staticmethod
-    def split_values(raw):
-        if raw is None:
-            return []
-        if isinstance(raw, (list, tuple)):
-            return list(raw)
-        if isinstance(raw, str):
-            return [item.strip() for item in raw.split(",")]
-        return [raw]
+    def _split_values(raw: str):
+        return [item.strip() for item in raw.split(",")]
 
     @staticmethod
-    def ilike_supported(col):
+    def _ilike_supported(col: ColumnElement[Any]):
         return hasattr(col, "ilike")
 
     @staticmethod
     def _apply_filter(query: Select, column: ColumnElement[Any], f: Filter):
-        op = str(f.operator).lower() if f.operator is not None else "eq"
-        raw_value = f.value
+        op = f.operator  # type: FilterOperator
+        raw_value = f.value  # type: str
 
         # Build conditions based on operator
-        if op == "eq":
-            query = query.where(column == FSPManager.coerce_value(column, raw_value))
-        elif op == "ne":
-            query = query.where(column != FSPManager.coerce_value(column, raw_value))
-        elif op == "gt":
-            query = query.where(column > FSPManager.coerce_value(column, raw_value))
-        elif op == "gte":
-            query = query.where(column >= FSPManager.coerce_value(column, raw_value))
-        elif op == "lt":
-            query = query.where(column < FSPManager.coerce_value(column, raw_value))
-        elif op == "lte":
-            query = query.where(column <= FSPManager.coerce_value(column, raw_value))
-        elif op == "like":
-            query = query.where(column.like(str(raw_value)))
-        elif op == "not_like":
-            query = query.where(not_(column.like(str(raw_value))))
-        elif op == "ilike":
-            pattern = str(raw_value)
-            if FSPManager.ilike_supported(column):
+        if op == FilterOperator.EQ:
+            query = query.where(column == FSPManager._coerce_value(column, raw_value))
+        elif op == FilterOperator.NE:
+            query = query.where(column != FSPManager._coerce_value(column, raw_value))
+        elif op == FilterOperator.GT:
+            query = query.where(column > FSPManager._coerce_value(column, raw_value))
+        elif op == FilterOperator.GTE:
+            query = query.where(column >= FSPManager._coerce_value(column, raw_value))
+        elif op == FilterOperator.LT:
+            query = query.where(column < FSPManager._coerce_value(column, raw_value))
+        elif op == FilterOperator.LTE:
+            query = query.where(column <= FSPManager._coerce_value(column, raw_value))
+        elif op == FilterOperator.LIKE:
+            query = query.where(column.like(raw_value))
+        elif op == FilterOperator.NOT_LIKE:
+            query = query.where(not_(column.like(raw_value)))
+        elif op == FilterOperator.ILIKE:
+            pattern = raw_value
+            if FSPManager._ilike_supported(column):
                 query = query.where(column.ilike(pattern))
             else:
                 query = query.where(func.lower(column).like(pattern.lower()))
-        elif op == "not_ilike":
-            pattern = str(raw_value)
-            if FSPManager.ilike_supported(column):
+        elif op == FilterOperator.NOT_ILIKE:
+            pattern = raw_value
+            if FSPManager._ilike_supported(column):
                 query = query.where(not_(column.ilike(pattern)))
             else:
                 query = query.where(not_(func.lower(column).like(pattern.lower())))
-        elif op == "in":
-            vals = [FSPManager.coerce_value(column, v) for v in FSPManager.split_values(raw_value)]
+        elif op == FilterOperator.IN:
+            vals = [
+                FSPManager._coerce_value(column, v) for v in FSPManager._split_values(raw_value)
+            ]
             query = query.where(column.in_(vals))
-        elif op == "not_in":
-            vals = [FSPManager.coerce_value(column, v) for v in FSPManager.split_values(raw_value)]
+        elif op == FilterOperator.NOT_IN:
+            vals = [
+                FSPManager._coerce_value(column, v) for v in FSPManager._split_values(raw_value)
+            ]
             query = query.where(not_(column.in_(vals)))
-        elif op == "between":
-            vals = FSPManager.split_values(raw_value)
+        elif op == FilterOperator.BETWEEN:
+            vals = FSPManager._split_values(raw_value)
             if len(vals) == 2:
                 # Ignore malformed between; alternatively raise 400
-                low = FSPManager.coerce_value(column, vals[0])
-                high = FSPManager.coerce_value(column, vals[1])
+                low = FSPManager._coerce_value(column, vals[0])
+                high = FSPManager._coerce_value(column, vals[1])
                 query = query.where(column.between(low, high))
-        elif op == "is_null":
+        elif op == FilterOperator.IS_NULL:
             query = query.where(column.is_(None))
-        elif op == "is_not_null":
+        elif op == FilterOperator.IS_NOT_NULL:
             query = query.where(column.is_not(None))
-        elif op == "starts_with":
-            pattern = f"{str(raw_value)}%"
-            if FSPManager.ilike_supported(column):
+        elif op == FilterOperator.STARTS_WITH:
+            pattern = f"{raw_value}%"
+            if FSPManager._ilike_supported(column):
                 query = query.where(column.ilike(pattern))
             else:
                 query = query.where(func.lower(column).like(pattern.lower()))
-        elif op == "ends_with":
-            pattern = f"%{str(raw_value)}"
-            if FSPManager.ilike_supported(column):
+        elif op == FilterOperator.ENDS_WITH:
+            pattern = f"%{raw_value}"
+            if FSPManager._ilike_supported(column):
                 query = query.where(column.ilike(pattern))
             else:
                 query = query.where(func.lower(column).like(pattern.lower()))
-        elif op == "contains":
-            pattern = f"%{str(raw_value)}%"
-            if FSPManager.ilike_supported(column):
+        elif op == FilterOperator.CONTAINS:
+            pattern = f"%{raw_value}%"
+            if FSPManager._ilike_supported(column):
                 query = query.where(column.ilike(pattern))
             else:
                 query = query.where(func.lower(column).like(pattern.lower()))
-        else:
-            # Unknown operator: skip
-            pass
+        # Unknown operator: skip
         return query
