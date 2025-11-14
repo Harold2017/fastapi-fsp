@@ -111,7 +111,7 @@ def _parse_filters(
 def _parse_sort(
     sort_by: Optional[str] = Query(None, alias="sort_by"),
     order: Optional[SortingOrder] = Query(SortingOrder.ASC, alias="order"),
-):
+) -> Optional[SortingQuery]:
     if not sort_by:
         return None
     return SortingQuery(sort_by=sort_by, order=order)
@@ -128,8 +128,8 @@ class FSPManager:
     def __init__(
         self,
         request: Request,
-        filters: Annotated[List[Filter], Depends(_parse_filters)],
-        sorting: Annotated[SortingQuery, Depends(_parse_sort)],
+        filters: Annotated[Optional[List[Filter]], Depends(_parse_filters)],
+        sorting: Annotated[Optional[SortingQuery], Depends(_parse_sort)],
         pagination: Annotated[PaginationQuery, Depends(_parse_pagination)],
     ):
         self.request = request
@@ -152,146 +152,25 @@ class FSPManager:
         )
         return result.all()
 
-    def _count_total(self, query: Select, session: Session) -> int:
-        # Count the total rows of the given query (with filters/sort applied) ignoring pagination
-        count_query = select(func.count()).select_from(query.subquery())
-        return session.exec(count_query).one()
-
-    async def _count_total_async(self, query: Select, session: AsyncSession) -> int:
-        count_query = select(func.count()).select_from(query.subquery())
-        result = await session.exec(count_query)
-        return result.one()
-
-    def _apply_filters(
-        self,
-        query: Select,
-        columns_map: ColumnCollection[str, ColumnElement[Any]],
-    ) -> Select:
-        for f in self.filters:
-            # filter of `self.filters` has been validated in the `_parse_filters`
-            column = columns_map.get(f.field)
-            # Skip unknown fields silently
-            if column is not None:
-                query = FSPManager._apply_filter(query, column, f)
-
-        return query
-
-    def _apply_sort(
-        self,
-        query: Select,
-        columns_map: ColumnCollection[str, ColumnElement[Any]],
-    ) -> Select:
-        column = columns_map.get(self.sorting.sort_by)
-        # Unknown sort column; skip sorting
-        if column is not None:
-            query = query.order_by(
-                column.desc() if self.sorting.order == SortingOrder.DESC else column.asc()
-            )
-        return query
-
     def generate_response(self, query: Select, session: Session) -> PaginatedResponse[Any]:
         columns_map = query.selected_columns
-        if self.filters:
-            query = self._apply_filters(query, columns_map)
-        if self.sorting:
-            query = self._apply_sort(query, columns_map)
+        query = FSPManager._apply_filters(query, columns_map, self.filters)
+        query = FSPManager._apply_sort(query, columns_map, self.sorting)
 
         total_items = self._count_total(query, session)
-        per_page = self.pagination.per_page
-        current_page = self.pagination.page
-        total_pages = max(1, math.ceil(total_items / per_page)) if total_items is not None else 1
-
         data_page = self.paginate(query, session)
-
-        # Build links based on current URL, replacing/adding page and per_page parameters
-        url = self.request.url
-        first_url = str(url.include_query_params(page=1, per_page=per_page))
-        last_url = str(url.include_query_params(page=total_pages, per_page=per_page))
-        next_url = (
-            str(url.include_query_params(page=current_page + 1, per_page=per_page))
-            if current_page < total_pages
-            else None
-        )
-        prev_url = (
-            str(url.include_query_params(page=current_page - 1, per_page=per_page))
-            if current_page > 1
-            else None
-        )
-        self_url = str(url.include_query_params(page=current_page, per_page=per_page))
-
-        return PaginatedResponse(
-            data=data_page,
-            meta=Meta(
-                pagination=Pagination(
-                    total_items=total_items,
-                    per_page=per_page,
-                    current_page=current_page,
-                    total_pages=total_pages,
-                ),
-                filters=self.filters,
-                sort=self.sorting,
-            ),
-            links=Links(
-                self=self_url,
-                first=first_url,
-                last=last_url,
-                next=next_url,
-                prev=prev_url,
-            ),
-        )
+        return self._generate_response(total_items=total_items, data_page=data_page)
 
     async def generate_response_async(
         self, query: Select, session: AsyncSession
     ) -> PaginatedResponse[Any]:
         columns_map = query.selected_columns
-        if self.filters:
-            query = self._apply_filters(query, columns_map)
-        if self.sorting and self.sorting.sort_by:
-            query = self._apply_sort(query, columns_map)
+        query = FSPManager._apply_filters(query, columns_map, self.filters)
+        query = FSPManager._apply_sort(query, columns_map, self.sorting)
 
         total_items = await self._count_total_async(query, session)
-        per_page = self.pagination.per_page
-        current_page = self.pagination.page
-        total_pages = max(1, math.ceil(total_items / per_page)) if total_items is not None else 1
-
         data_page = await self.paginate_async(query, session)
-
-        # Build links based on current URL, replacing/adding page and per_page parameters
-        url = self.request.url
-        first_url = str(url.include_query_params(page=1, per_page=per_page))
-        last_url = str(url.include_query_params(page=total_pages, per_page=per_page))
-        next_url = (
-            str(url.include_query_params(page=current_page + 1, per_page=per_page))
-            if current_page < total_pages
-            else None
-        )
-        prev_url = (
-            str(url.include_query_params(page=current_page - 1, per_page=per_page))
-            if current_page > 1
-            else None
-        )
-        self_url = str(url.include_query_params(page=current_page, per_page=per_page))
-
-        return PaginatedResponse(
-            data=data_page,
-            meta=Meta(
-                pagination=Pagination(
-                    total_items=total_items,
-                    per_page=per_page,
-                    current_page=current_page,
-                    total_pages=total_pages,
-                ),
-                filters=self.filters,
-                sort=self.sorting,
-            ),
-            links=Links(
-                self=self_url,
-                first=first_url,
-                last=last_url,
-                next=next_url,
-                prev=prev_url,
-            ),
-        )
+        return self._generate_response(total_items=total_items, data_page=data_page)
 
     @staticmethod
     def _coerce_value(column: ColumnElement[Any], raw: str):
@@ -414,3 +293,89 @@ class FSPManager:
                 query = query.where(func.lower(column).like(pattern.lower()))
         # Unknown operator: skip
         return query
+    
+
+    @staticmethod
+    def _count_total(query: Select, session: Session) -> int:
+        # Count the total rows of the given query (with filters/sort applied) ignoring pagination
+        count_query = select(func.count()).select_from(query.subquery())
+        return session.exec(count_query).one()
+
+    @staticmethod
+    async def _count_total_async(query: Select, session: AsyncSession) -> int:
+        count_query = select(func.count()).select_from(query.subquery())
+        result = await session.exec(count_query)
+        return result.one()
+
+    @staticmethod
+    def _apply_filters(
+        query: Select,
+        columns_map: ColumnCollection[str, ColumnElement[Any]],
+        filters: Optional[List[Filter]],
+    ) -> Select:
+        if filters:
+            for f in filters:
+                # filter of `filters` has been validated in the `_parse_filters`
+                column = columns_map.get(f.field)
+                # Skip unknown fields silently
+                if column is not None:
+                    query = FSPManager._apply_filter(query, column, f)
+
+        return query
+
+    @staticmethod
+    def _apply_sort(
+        query: Select,
+        columns_map: ColumnCollection[str, ColumnElement[Any]],
+        sorting: Optional[SortingQuery],
+    ) -> Select:
+        if sorting and sorting.sort_by:
+            column = columns_map.get(sorting.sort_by)
+            # Unknown sort column; skip sorting
+            if column is not None:
+                query = query.order_by(
+                    column.desc() if sorting.order == SortingOrder.DESC else column.asc()
+                )
+        return query
+    
+    def _generate_response(self, total_items: int, data_page: Any):
+        per_page = self.pagination.per_page
+        current_page = self.pagination.page
+        total_pages = max(1, math.ceil(total_items / per_page)) if total_items is not None else 1
+
+        # Build links based on current URL, replacing/adding page and per_page parameters
+        url = self.request.url
+        first_url = str(url.include_query_params(page=1, per_page=per_page))
+        last_url = str(url.include_query_params(page=total_pages, per_page=per_page))
+        next_url = (
+            str(url.include_query_params(page=current_page + 1, per_page=per_page))
+            if current_page < total_pages
+            else None
+        )
+        prev_url = (
+            str(url.include_query_params(page=current_page - 1, per_page=per_page))
+            if current_page > 1
+            else None
+        )
+        self_url = str(url.include_query_params(page=current_page, per_page=per_page))
+
+        return PaginatedResponse(
+            data=data_page,
+            meta=Meta(
+                pagination=Pagination(
+                    total_items=total_items,
+                    per_page=per_page,
+                    current_page=current_page,
+                    total_pages=total_pages,
+                ),
+                filters=self.filters,
+                sort=self.sorting,
+            ),
+            links=Links(
+                self=self_url,
+                first=first_url,
+                last=last_url,
+                next=next_url,
+                prev=prev_url,
+            ),
+        )
