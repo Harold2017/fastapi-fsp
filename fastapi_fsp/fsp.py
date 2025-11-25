@@ -576,6 +576,11 @@ class FSPManager:
         """
         if sorting and sorting.sort_by:
             column = columns_map.get(sorting.sort_by)
+            if column is None:
+                try:
+                    column = getattr(query.column_descriptions[0]["entity"], sorting.sort_by, None)
+                except Exception:
+                    pass
             # Unknown sort column; skip sorting
             if column is not None:
                 query = query.order_by(

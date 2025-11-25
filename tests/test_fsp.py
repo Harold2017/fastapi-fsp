@@ -83,3 +83,13 @@ def test_sort_heroes(session: Session, client: TestClient):
     data = response.json()["data"]
     assert data[0]["name"] == hero_2.name
     assert data[1]["name"] == hero_1.name
+
+    response = client.get("/heroes/?sort_by=full_name&order=asc")
+    data = response.json()["data"]
+    assert data[0]["full_name"] == f"{hero_1.name}-{hero_1.secret_name}"
+    assert data[1]["full_name"] == f"{hero_2.name}-{hero_2.secret_name}"
+
+    response = client.get("/heroes/?sort_by=full_name&order=desc")
+    data = response.json()["data"]
+    assert data[0]["full_name"] == f"{hero_2.name}-{hero_2.secret_name}"
+    assert data[1]["full_name"] == f"{hero_1.name}-{hero_1.secret_name}"

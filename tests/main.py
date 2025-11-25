@@ -1,9 +1,11 @@
 from datetime import datetime
-from typing import Optional
+from typing import ClassVar, Optional
 
 from fastapi import Depends, FastAPI
 from fastapi_fsp.fsp import FSPManager
 from fastapi_fsp.models import PaginatedResponse
+from sqlalchemy import func
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 
@@ -13,6 +15,15 @@ class HeroBase(SQLModel):
     age: Optional[int] = Field(default=None, index=True)
     created_at: datetime = Field(default_factory=datetime.now)
     deleted: bool = Field(default=False)
+    full_name: ClassVar[str]
+
+    @hybrid_property
+    def full_name(self) -> str:
+        return f"{self.name}-{self.secret_name}"
+
+    @full_name.expression
+    def full_name(cls):
+        return func.concat(cls.name, "-", cls.secret_name)
 
 
 class Hero(HeroBase, table=True):
@@ -25,6 +36,7 @@ class HeroCreate(HeroBase):
 
 class HeroPublic(HeroBase):
     id: int
+    full_name: str
 
 
 class HeroUpdate(SQLModel):
